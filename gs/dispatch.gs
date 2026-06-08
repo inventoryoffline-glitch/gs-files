@@ -89,13 +89,13 @@ function dispatch(p) {
 
     if (newRecordRows.length > 0) {
       const startRow = recordSheet.getLastRow() + 1;
-      const range    = recordSheet.getRange(startRow, 1, newRecordRows.length, newRecordRows[0].length);
-      range.setValues(newRecordRows);
-      // Force date column to text to prevent Sheets auto-converting
+      // Pre-set number format to string for the date column BEFORE setting values
       const dateColIdx = recHeaders.indexOf('date');
       if (dateColIdx >= 0) {
-        recordSheet.getRange(startRow, dateColIdx + 1, newRecordRows.length, 1).setNumberFormat('@STRING@');
+        recordSheet.getRange(startRow, dateColIdx + 1, newRecordRows.length, 1).setNumberFormat('@');
       }
+      const range = recordSheet.getRange(startRow, 1, newRecordRows.length, newRecordRows[0].length);
+      range.setValues(newRecordRows);
     }
 
     // Update allocation dispatchedQty (FIFO)
@@ -108,11 +108,11 @@ function dispatch(p) {
             const planned    = parseInt(allocData[i][aPlannedIdx])||0;
             const dispatched = parseInt(allocData[i][aDispIdx])||0;
             const canFill    = planned - dispatched;
-            if (canFill <= 0) continue;
-            const fill = Math.min(canFill, remaining);
-            allocSheet.getRange(i+1, aDispIdx+1).setValue(dispatched + fill);
-            allocData[i][aDispIdx] = dispatched + fill;
-            remaining -= fill;
+            if (canFill > 0) {
+              const take = Math.min(remaining, canFill);
+              allocSheet.getRange(i + 1, aDispIdx + 1).setValue(dispatched + take);
+              remaining -= take;
+            }
           }
         }
       });
@@ -131,80 +131,58 @@ function cancelDispatch(p) {
     const stockSheet  = ss.getSheetByName(SHEET_STOCK);
     const recordSheet = ss.getSheetByName(SHEET_RECORDS);
     const allocSheet  = ss.getSheetByName(SHEET_ALLOCATIONS);
-    const recData     = recordSheet.getDataRange().getValues();
-    const headers     = recData[0];
-    const vIdx    = headers.indexOf("voucherNo");
-    const iIdx    = headers.indexOf("itemId");
-    const instIdx = headers.indexOf("instId");
-    const qIdx    = headers.indexOf("qty");
-    const stIdx   = headers.indexOf("status");
-    const stockData = stockSheet.getDataRange().getValues();
-    const allocData = allocSheet ? allocSheet.getDataRange().getValues() : [[]];
-    const aHeaders  = allocData[0]||[];
-    const aInstIdx  = aHeaders.indexOf("instituteId");
-    const aItemIdx  = aHeaders.indexOf("itemId");
-    const aDispIdx  = aHeaders.indexOf("dispatchedQty");
 
-    let found = false;
+    const recData    = recordSheet.getDataRange().getValues();
+    const recHeaders = recData[0];
+    const vIdx       = recHeaders.indexOf("voucherNo");
+    const stIdx      = recHeaders.indexOf("status");
+    const itemIdIdx  = recHeaders.indexOf("itemId");
+    const qtyIdx     = recHeaders.indexOf("qty");
+    const instIdIdx  = recHeaders.indexOf("instId");
+
+    const stockData  = stockSheet.getDataRange().getValues();
+    const allocData  = allocSheet ? allocSheet.getDataRange().getValues() : [[]];
+    const aHeaders   = allocData[0] || [];
+    const aInstIdx   = aHeaders.indexOf("instituteId");
+    const aItemIdx   = aHeaders.indexOf("itemId");
+    const aDispIdx   = aHeaders.indexOf("dispatchedQty");
+
+    let foundAny = false;
     for (let i = 1; i < recData.length; i++) {
-      if (recData[i][vIdx].toString() === p.voucherNo &&
-          recData[i][stIdx].toString() !== "cancelled") {
-        const itemId = recData[i][iIdx].toString();
-        const instId = recData[i][instIdx] ? recData[i][instIdx].toString() : '';
-        const qty    = parseInt(recData[i][qIdx])||0;
+      if (recData[i][vIdx].toString() === p.voucherNo && (recData[i][stIdx]||"active") === "active") {
+        const itemId = recData[i][itemIdIdx];
+        const qty    = parseInt(recData[i][qtyIdx]) || 0;
+        const instId = recData[i][instIdIdx];
 
-        recordSheet.getRange(i+1, stIdx+1).setValue("cancelled");
-
-        // Restore stock
+        // 1. Revert Stock
         for (let j = 1; j < stockData.length; j++) {
-          if (stockData[j][0].toString() === itemId) {
-            const curQty  = parseInt(stockData[j][4])||0;
-            const curDisp = parseInt(stockData[j][5])||0;
-            stockSheet.getRange(j+1, 5).setValue(curQty + qty);
-            stockSheet.getRange(j+1, 6).setValue(Math.max(0, curDisp - qty));
-            stockData[j][4] = curQty + qty;
-            stockData[j][5] = Math.max(0, curDisp - qty);
+          if (stockData[j][0].toString() === itemId.toString()) {
+            const curQty  = parseInt(stockData[j][4]) || 0;
+            const curDisp = parseInt(stockData[j][5]) || 0;
+            stockSheet.getRange(j + 1, 5, 1, 2).setValues([[curQty + qty, Math.max(0, curDisp - qty)]]);
             break;
           }
         }
 
-        // Restore allocation dispatchedQty (reverse FIFO)
-        if (allocData.length > 1 && aInstIdx >= 0 && instId) {
-          let toRestore = qty;
-          for (let k = allocData.length-1; k >= 1 && toRestore > 0; k--) {
-            if ((allocData[k][aInstIdx]||'').toString() === instId &&
-                (allocData[k][aItemIdx]||'').toString() === itemId) {
-              const dispatched = parseInt(allocData[k][aDispIdx])||0;
-              const restore    = Math.min(dispatched, toRestore);
-              allocSheet.getRange(k+1, aDispIdx+1).setValue(dispatched - restore);
-              allocData[k][aDispIdx] = dispatched - restore;
-              toRestore -= restore;
+        // 2. Revert Allocation
+        if (allocData.length > 1 && aInstIdx >= 0) {
+          for (let k = 1; k < allocData.length; k++) {
+            if (allocData[k][aInstIdx].toString() === instId.toString() &&
+                allocData[k][aItemIdx].toString() === itemId.toString()) {
+              const curDisp = parseInt(allocData[k][aDispIdx]) || 0;
+              allocSheet.getRange(k + 1, aDispIdx + 1).setValue(Math.max(0, curDisp - qty));
+              // Don't break, might be multiple allocations (though unlikely in same voucher)
             }
           }
         }
-        found = true;
-      }
-    }
-    return found ? { success: true } : { error: "Voucher not found or already cancelled" };
-  });
-}
 
-function updateSerialNotes(p) {
-  return withLock(() => {
-    if (!p.recordId) throw new Error("Record ID required.");
-    clearCache();
-    const sheet   = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_RECORDS);
-    const data    = sheet.getDataRange().getValues();
-    const headers = data[0];
-    const idIdx   = headers.indexOf("id");
-    const snIdx   = headers.indexOf("serialNotes");
-    if (snIdx < 0) throw new Error("serialNotes column not found.");
-    for (let i = 1; i < data.length; i++) {
-      if (data[i][idIdx].toString() === p.recordId.toString()) {
-        sheet.getRange(i+1, snIdx+1).setValue(p.serialNotes||"");
-        return { success: true };
+        // 3. Mark Record as Cancelled
+        recordSheet.getRange(i + 1, stIdx + 1).setValue("cancelled");
+        foundAny = true;
       }
     }
-    return { error: "Record not found" };
+
+    if (!foundAny) throw new Error("No active records found for voucher: " + p.voucherNo);
+    return { success: true };
   });
 }
