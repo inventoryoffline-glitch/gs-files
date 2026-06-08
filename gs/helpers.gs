@@ -22,7 +22,7 @@ function initSheets() {
   ].forEach(([sheetName, col]) => {
     const sh = ss.getSheetByName(sheetName);
     if (!sh || sh.getLastRow() < 2) return;
-    sh.getRange(2, col, sh.getLastRow() - 1, 1).setNumberFormat('@STRING@');
+    sh.getRange(2, col, sh.getLastRow() - 1, 1).setNumberFormat('@');
   });
 
   // Seed default settings
@@ -106,7 +106,9 @@ function validatePositiveInt(val, name) {
 // ── Date Utilities ────────────────────────────────────────────
 // Safe parse: splits "YYYY-MM-DD" to avoid UTC timezone shift in IST and other UTC+ zones
 function safeParseDate(str) {
+  if (!str) return new Date();
   const parts = str.split('-');
+  if (parts.length !== 3) return new Date(str);
   const d = new Date(Number(parts[0]), Number(parts[1])-1, Number(parts[2]));
   d.setHours(0,0,0,0);
   return d;
@@ -145,31 +147,31 @@ function getAllData() {
   const cached = getCached();
   if (cached) return cached;
   const data = {
-    stock:           getSheetData(SHEET_STOCK),
-    institutes:      getSheetData(SHEET_INSTITUTES),
-    records:         getSheetData(SHEET_RECORDS),
-    adjustments:     getSheetData(SHEET_ADJUSTMENTS),
-    distTemplates:   getSheetData(SHEET_TEMPLATES),
+    stock:         getSheetData(SHEET_STOCK),
+    institutes:    getSheetData(SHEET_INSTITUTES),
+    records:       getSheetData(SHEET_RECORDS),
+    adjustments:   getSheetData(SHEET_ADJUSTMENTS),
+    distTemplates: getSheetData(SHEET_TEMPLATES),
     distAllocations: getSheetData(SHEET_ALLOCATIONS),
-    settings:        getSettings()
+    settings:      getSettings()
   };
   setCache(data);
   return data;
 }
 
 function getSheetData(sheetName) {
-  const ss    = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(sheetName);
   if (!sheet) return [];
   const lastRow = sheet.getLastRow();
   if (lastRow <= 1) return [];
-  const data    = sheet.getDataRange().getValues();
+  const data = sheet.getDataRange().getValues();
   const headers = data[0];
   return data.slice(1).map(row => {
     const obj = {};
     headers.forEach((h, i) => {
       const v = row[i];
-      // Convert Date objects to YYYY-MM-DD string using local methods — never JSON.stringify a Date
+      // Convert Date objects to YYYY-MM-DD string using local methods - never JSON.stringify a Date
       if (v instanceof Date && !isNaN(v.getTime())) {
         obj[h] = fmtDateGS(v);
       } else {
@@ -184,11 +186,12 @@ function deleteRow(sheetName, id) {
   return withLock(() => {
     if (!id) throw new Error("ID is required for delete.");
     clearCache();
-    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
-    const data  = sheet.getDataRange().getValues();
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(sheetName);
+    const data = sheet.getDataRange().getValues();
     for (let i = 1; i < data.length; i++) {
       if (data[i][0].toString() === id.toString()) {
-        sheet.deleteRow(i+1);
+        sheet.deleteRow(i + 1);
         return { success: true };
       }
     }
