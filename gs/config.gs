@@ -9,6 +9,7 @@ const SHEET_SETTINGS    = "Settings";
 const SHEET_ADJUSTMENTS = "Adjustments";
 const SHEET_TEMPLATES   = "DistributionTemplates";
 const SHEET_ALLOCATIONS = "TemplateAllocations";
+const SHEET_NOTES       = "InstituteNotes";
 const SHEET_LOGS        = "Logs";
 const CACHE_KEY         = "inv_all_data_v8";
 const CACHE_DURATION    = 300; // 5 minutes
@@ -47,6 +48,10 @@ function handleRequest(e) {
     else if (action === "deleteAllocation")      result = deleteRow(SHEET_ALLOCATIONS, p.allocationId);
     else if (action === "runAudit")              result = runServerAudit();
     else if (action === "updateSerialNotes")     result = updateSerialNotes(p);
+    else if (action === "saveInstituteNote")      result = saveInstituteNote(p);
+    else if (action === "getInstituteNotes")      result = getInstituteNotes(p);
+    else if (action === "deleteInstituteNote")    result = deleteInstituteNote(p);
+    else if (action === "getAllInstituteNotes")   result = getAllInstituteNotes(p);
     else result = { error: "Unknown action: " + action };
 
     writeLog(action, "success", "");
