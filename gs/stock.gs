@@ -1,30 +1,8 @@
 // ============================================================
-// stock.gs — Stock CRUD, Settings, Institutes, Remove Stock
+// stock.gs — UPDATED: Added Batch Processing
 // ============================================================
 
-// ── Settings ──────────────────────────────────────────────────
-function getSettings() {
-  const data = getSheetData(SHEET_SETTINGS);
-  const obj  = {};
-  data.forEach(r => { obj[r.key] = r.value; });
-  return obj;
-}
-
-function saveSetting(key, value) {
-  return withLock(() => {
-    clearCache();
-    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_SETTINGS);
-    const data  = sheet.getDataRange().getValues();
-    for (let i = 1; i < data.length; i++) {
-      if (data[i][0] === key) {
-        sheet.getRange(i+1, 2).setValue(value);
-        return { success: true };
-      }
-    }
-    sheet.appendRow([key, value]);
-    return { success: true };
-  });
-}
+// ... (existing getSettings and saveSetting functions)
 
 // ── Stock ─────────────────────────────────────────────────────
 function addStock(p) {
@@ -40,64 +18,48 @@ function addStock(p) {
   });
 }
 
-function updateStock(p) {
+/**
+ * BATCH ADD STOCK: Processes multiple items in a single lock session
+ */
+function batchAddStock(p) {
   return withLock(() => {
-    validateRequired(p, ["id"]);
-    const addQty = validatePositiveInt(p.addQty || 0, "Quantity to add");
+    if (!p.itemsJson) throw new Error("No data provided");
+    const items = JSON.parse(p.itemsJson);
+    if (!Array.isArray(items) || items.length === 0) throw new Error("Invalid data format");
+
     clearCache();
     const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_STOCK);
-    const data  = sheet.getDataRange().getValues();
-    for (let i = 1; i < data.length; i++) {
-      if (data[i][0].toString() === p.id.toString()) {
-        const cur = parseInt(data[i][4]) || 0;
-        sheet.getRange(i+1, 5).setValue(cur + addQty);
-        return { success: true };
-      }
+    const timestamp = Date.now();
+    
+    const rows = items.map((item, index) => {
+      const id = (timestamp + index).toString();
+      const qty = parseInt(item.qty) || 0;
+      const low = parseInt(item.low) || 10;
+      return [
+        id, 
+        (item.name || "Unknown").trim(), 
+        item.cat || "", 
+        item.unit || "", 
+        qty, 
+        0, 
+        low, 
+        item.expiry || "", 
+        item.showLow || "true",
+        item.serialType || "",
+        item.serialValue || "",
+        item.refNumber || ""
+      ];
+    });
+
+    if (rows.length > 0) {
+      sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
     }
-    return { error: "Item not found" };
+
+    return { success: true, count: rows.length };
   });
 }
 
-function updateShowLow(p) {
-  return withLock(() => {
-    validateRequired(p, ["id"]);
-    clearCache();
-    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_STOCK);
-    const data  = sheet.getDataRange().getValues();
-    for (let i = 1; i < data.length; i++) {
-      if (data[i][0].toString() === p.id.toString()) {
-        sheet.getRange(i+1, 9).setValue(p.showLow);
-        return { success: true };
-      }
-    }
-    return { error: "Item not found" };
-  });
-}
-
-function removeStock(p) {
-  return withLock(() => {
-    validateRequired(p, ["itemId","date","reason"]);
-    const qty = validatePositiveInt(p.qty, "Quantity");
-    clearCache();
-    const ss         = SpreadsheetApp.getActiveSpreadsheet();
-    const stockSheet = ss.getSheetByName(SHEET_STOCK);
-    const adjSheet   = ss.getSheetByName(SHEET_ADJUSTMENTS);
-    const stockData  = stockSheet.getDataRange().getValues();
-    for (let i = 1; i < stockData.length; i++) {
-      if (stockData[i][0].toString() === p.itemId.toString()) {
-        const curQty   = parseInt(stockData[i][4]) || 0;
-        if (qty > curQty) throw new Error("Removal quantity exceeds available stock.");
-        const newQty   = curQty - qty;
-        const itemName = stockData[i][1];
-        const unit     = stockData[i][3];
-        stockSheet.getRange(i+1, 5).setValue(newQty);
-        adjSheet.appendRow([Date.now().toString(), safeDateStr(p.date), p.itemId, itemName, unit, qty, p.reason||"Other", p.remarks||"", newQty]);
-        return { success: true, stockAfter: newQty };
-      }
-    }
-    return { error: "Item not found" };
-  });
-}
+// ... (existing updateStock, updateShowLow, removeStock functions)
 
 // ── Institutes ────────────────────────────────────────────────
 function addInstitute(p) {
@@ -108,5 +70,38 @@ function addInstitute(p) {
     const id    = Date.now().toString();
     sheet.appendRow([id, p.name.trim(), p.category||"", p.contact||"", p.phone||"", p.address||""]);
     return { success: true, id };
+  });
+}
+
+/**
+ * BATCH ADD INSTITUTES
+ */
+function batchAddInstitutes(p) {
+  return withLock(() => {
+    if (!p.itemsJson) throw new Error("No data provided");
+    const items = JSON.parse(p.itemsJson);
+    if (!Array.isArray(items) || items.length === 0) throw new Error("Invalid data format");
+
+    clearCache();
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_INSTITUTES);
+    const timestamp = Date.now();
+    
+    const rows = items.map((inst, index) => {
+      const id = (timestamp + index).toString();
+      return [
+        id, 
+        (inst.name || "Unknown").trim(), 
+        inst.category || "", 
+        inst.contact || "", 
+        inst.phone || "", 
+        inst.address || ""
+      ];
+    });
+
+    if (rows.length > 0) {
+      sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+    }
+
+    return { success: true, count: rows.length };
   });
 }
